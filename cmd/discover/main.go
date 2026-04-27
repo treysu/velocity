@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-resty/resty/v2"
 	. "github.com/treysu/velocity/internal/app/discover"
@@ -26,23 +28,101 @@ func main() {
 
 	client := resty.New()
 
-	// Get velocity builds
-	var versionFamilyBuilds VersionFamilyBuildsResponse
-	url := fmt.Sprintf("https://api.papermc.io/v2/projects/%s/version_group/%s/builds", PROJECT, SupportedVersionGroup)
-	resp, err := client.R().Get(url)
-	if err != nil {
-		panic(err)
-	}
-	err = json.Unmarshal(resp.Body(), &versionFamilyBuilds)
-	if err != nil {
-		panic(err)
-	}
-
-	// Get pushed tags
+	// Get existing tags and find max build number
 	var tags []string
 	dockerTags := GetExistingTags(DockerRepository)
 	for _, dockerTag := range dockerTags {
 		tags = append(tags, dockerTag.Name)
+	}
+	maxBuild := 0
+	for _, tag := range tags {
+		if strings.Contains(tag, "-") {
+			parts := strings.Split(tag, "-")
+			if len(parts) >= 2 {
+				if build, err := strconv.Atoi(parts[len(parts)-1]); err == nil {
+					if build > maxBuild {
+						maxBuild = build
+					}
+				}
+			}
+		}
+	}
+
+	// Get velocity versions
+	var versionsResp VersionsResponse
+	url := fmt.Sprintf("%s/projects/%s/versions", BaseURL, PROJECT)
+	resp, err := client.R().Get(url)
+	if err != nil {
+		panic(err)
+	}
+	err = json.Unmarshal(resp.Body(), &versionsResp)
+	if err != nil {
+		panic(err)
+	}
+
+	// Collect new builds from supported versions
+	buildToVersion := make(map[int]string)
+	var allBuilds []int
+	for _, entry := range versionsResp.Versions {
+		if entry.Version.Support.Status == "SUPPORTED" {
+			for _, build := range entry.Builds {
+				if build > maxBuild {
+					allBuilds = append(allBuilds, build)
+					buildToVersion[build] = entry.Version.ID
+				}
+			}
+		}
+	}
+	sort.Ints(allBuilds)
+
+	// Fetch build details for new builds
+	var versionFamilyBuilds []VersionFamilyBuild
+	for _, buildNum := range allBuilds {
+		version := buildToVersion[buildNum]
+		buildURL := fmt.Sprintf("%s/projects/%s/versions/%s/builds/%d", BaseURL, PROJECT, version, buildNum)
+		resp, err := client.R().Get(buildURL)
+		if err != nil {
+			panic(err)
+		}
+		var buildResp BuildResponse
+		err = json.Unmarshal(resp.Body(), &buildResp)
+		if err != nil {
+			panic(err)
+		}
+
+		// Create VersionFamilyBuild
+		download := Download{
+			Name:   buildResp.Downloads[DownloadsKey].Name,
+			Sha256: buildResp.Downloads[DownloadsKey].Checksums.Sha256,
+			URL:    buildResp.Downloads[DownloadsKey].URL,
+		}
+		downloads := map[string]Download{DownloadsKey: download}
+		promoted := buildResp.Channel == "STABLE"
+		var changes []Change
+		for _, commit := range buildResp.Commits {
+			changes = append(changes, Change{
+				Commit:  commit.Sha,
+				Summary: commit.Message,
+				Message: commit.Message,
+			})
+		}
+		timeParsed, err := time.Parse(time.RFC3339, buildResp.Time)
+		if err != nil {
+			timeParsed = time.Time{}
+		}
+		vb := VersionBuild{
+			Build:     buildResp.ID,
+			Time:      timeParsed,
+			Channel:   buildResp.Channel,
+			Promoted:  promoted,
+			Changes:   changes,
+			Downloads: downloads,
+		}
+		vfb := VersionFamilyBuild{
+			VersionBuild: vb,
+			Version:      version,
+		}
+		versionFamilyBuilds = append(versionFamilyBuilds, vfb)
 	}
 
 	// build promotions
@@ -52,7 +132,7 @@ func main() {
 	} else {
 		eventForPromotions = Cron
 	}
-	promotions := BuildPromotions(versionFamilyBuilds.Builds, tags, eventForPromotions)
+	promotions := BuildPromotions(versionFamilyBuilds, tags, eventForPromotions)
 
 	// Print tags to promotion
 	fmt.Println("\nTags to build:")

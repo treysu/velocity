@@ -1,7 +1,6 @@
 package discover
 
 import (
-	"fmt"
 	"github.com/treysu/velocity/internal/pkg/utils/slices"
 	"golang.org/x/mod/semver"
 	"sort"
@@ -96,7 +95,7 @@ func BuildPromotions(builds []VersionFamilyBuild, existingTags []string, event E
 		}
 
 		promotion := Promotion{
-			DownloadURL: fmt.Sprintf("https://api.papermc.io/v2/projects/%s/versions/%s/builds/%d/downloads/%s", PROJECT, build.Version, build.Build, build.Downloads[DownloadsKey].Name),
+			DownloadURL: build.Downloads[DownloadsKey].URL,
 			DockerTags:  strings.Join(tags, "\\n"),
 		}
 		promotions = append(promotions, promotion)
