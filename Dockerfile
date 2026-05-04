@@ -9,21 +9,23 @@ LABEL org.opencontainers.image.licenses="MIT"
 
 ENV JAVA_MEMORY="512M"
 ENV JAVA_FLAGS="-XX:+UseStringDeduplication -XX:+UseG1GC -XX:G1HeapRegionSize=4M -XX:+UnlockExperimentalVMOptions -XX:+ParallelRefProcEnabled -XX:+AlwaysPreTouch"
+ENV PUID=1000
+ENV PGID=1000
+ENV VELOCITY_VERSION="latest"
 
 WORKDIR /data
 
-RUN mkdir -p /data && \
-    apk add --upgrade --no-cache openssl && \
-    addgroup -g ${VELOCITY_PGID:-1003} -S velocity && \
-    adduser -u ${VELOCITY_PUID:-1002} -S velocity -G velocity && \
-    chown -R velocity:velocity /data
+RUN apk add --upgrade --no-cache openssl shadow wget
 
-USER velocity
+COPY --from=tianon/gosu /gosu /usr/local/bin/
+
+RUN mkdir -p /data /opt/velocity
 
 VOLUME /data
 
 EXPOSE 25577
 
-COPY velocity/velocity-*.jar /opt/velocity/velocity.jar
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 
-ENTRYPOINT java -Xms$JAVA_MEMORY -Xmx$JAVA_MEMORY $JAVA_FLAGS -jar /opt/velocity/velocity.jar
+ENTRYPOINT ["/entrypoint.sh"]
