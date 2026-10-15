@@ -20,6 +20,10 @@ type Promotion struct {
 }
 
 func BuildPromotions(builds []VersionFamilyBuild, existingTags []string, event Event) []Promotion {
+	if len(builds) == 0 {
+		return nil
+	}
+
 	var notExistingTags []int
 	sharedTags := make(map[string]int)
 
@@ -71,7 +75,7 @@ func BuildPromotions(builds []VersionFamilyBuild, existingTags []string, event E
 			}
 		}
 
-		if !slices.Contains(promotedBuildIndex, latestSnapshotIndex) {
+		if latestSnapshot != "" && !slices.Contains(promotedBuildIndex, latestSnapshotIndex) {
 			promotedBuildIndex = append(promotedBuildIndex, latestSnapshotIndex)
 		}
 	} else {
