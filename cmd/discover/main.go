@@ -28,24 +28,11 @@ func main() {
 
 	client := resty.New()
 
-	// Get existing tags and find max build number
+	// Get existing tags
 	var tags []string
 	dockerTags := GetExistingTags(DockerRepository)
 	for _, dockerTag := range dockerTags {
 		tags = append(tags, dockerTag.Name)
-	}
-	maxBuild := 0
-	for _, tag := range tags {
-		if strings.Contains(tag, "-") {
-			parts := strings.Split(tag, "-")
-			if len(parts) >= 2 {
-				if build, err := strconv.Atoi(parts[len(parts)-1]); err == nil {
-					if build > maxBuild {
-						maxBuild = build
-					}
-				}
-			}
-		}
 	}
 
 	// Get velocity versions
@@ -60,25 +47,28 @@ func main() {
 		panic(err)
 	}
 
-	// Collect new builds from supported versions
-	buildToVersion := make(map[int]string)
-	var allBuilds []int
+	// Collect supported builds that do not have a Docker tag yet.
+	// Build numbers can repeat across versions, so check each unique tag.
+	type pendingBuild struct {
+		Version string
+		Build   int
+	}
+	var pending []pendingBuild
 	for _, entry := range versionsResp.Versions {
 		if entry.Version.Support.Status == "SUPPORTED" {
 			for _, build := range entry.Builds {
-				if build > maxBuild {
-					allBuilds = append(allBuilds, build)
-					buildToVersion[build] = entry.Version.ID
+				if !containsTag(tags, GetUniqueTag(entry.Version.ID, build)) {
+					pending = append(pending, pendingBuild{entry.Version.ID, build})
 				}
 			}
 		}
 	}
-	sort.Ints(allBuilds)
+	sort.SliceStable(pending, func(i, j int) bool { return pending[i].Build < pending[j].Build })
 
 	// Fetch build details for new builds
 	var versionFamilyBuilds []VersionFamilyBuild
-	for _, buildNum := range allBuilds {
-		version := buildToVersion[buildNum]
+	for _, p := range pending {
+		version, buildNum := p.Version, p.Build
 		buildURL := fmt.Sprintf("%s/projects/%s/versions/%s/builds/%d", BaseURL, PROJECT, version, buildNum)
 		resp, err := client.R().Get(buildURL)
 		if err != nil {
@@ -172,4 +162,13 @@ func main() {
 
 		fmt.Println("\nShell script has been generated to scripts/dispatch.sh")
 	}
+}
+
+func containsTag(tags []string, tag string) bool {
+	for _, t := range tags {
+		if t == tag {
+			return true
+		}
+	}
+	return false
 }
